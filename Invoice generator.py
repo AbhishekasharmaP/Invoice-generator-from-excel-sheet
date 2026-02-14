@@ -9,10 +9,11 @@ from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
 from io import BytesIO
 from datetime import datetime
 import os
+import zipfile
 
 # Page configuration
 st.set_page_config(
-    page_title="Invoice Generator - APJ Digital Solutions",
+    page_title="Bulk Invoice Generator - APJ Digital Solutions",
     page_icon="📄",
     layout="wide"
 )
@@ -58,8 +59,8 @@ def number_to_words(num):
     
     return ' '.join(result) + ' Rupees Only'
 
-def generate_invoice_pdf(vendor_info, client_info, invoice_data, items_df, logo_path=None):
-    """Generate invoice PDF matching APJ Digital Solutions format"""
+def generate_invoice_pdf(bill_to_info, from_info, invoice_data, company_info, logo_path=None):
+    """Generate single invoice PDF"""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, 
                            topMargin=0.5*inch, bottomMargin=0.5*inch,
@@ -68,16 +69,6 @@ def generate_invoice_pdf(vendor_info, client_info, invoice_data, items_df, logo_
     styles = getSampleStyleSheet()
     
     # Custom styles
-    company_name_style = ParagraphStyle(
-        'CompanyName',
-        parent=styles['Normal'],
-        fontSize=16,
-        textColor=colors.black,
-        alignment=TA_RIGHT,
-        fontName='Helvetica-Bold',
-        spaceAfter=2,
-    )
-    
     company_detail_style = ParagraphStyle(
         'CompanyDetail',
         parent=styles['Normal'],
@@ -96,22 +87,21 @@ def generate_invoice_pdf(vendor_info, client_info, invoice_data, items_df, logo_
         spaceBefore=10,
     )
     
-    # Header with logo and company info
+    # Header with logo and company info (FROM - varies per row)
     header_data = []
     if logo_path and os.path.exists(logo_path):
         logo = RLImage(logo_path, width=1.2*inch, height=0.8*inch)
-        company_info_text = f"""<b>{vendor_info['name']}</b><br/>
-        <font size=8>PAN {vendor_info['pan']}<br/>
-        {vendor_info['address']}<br/>
-        Email: {vendor_info['email']}</font>"""
-        header_data = [[logo, Paragraph(company_info_text, company_detail_style)]]
+        from_info_text = f"""<b>{from_info['creator_name']}</b><br/>
+        <font size=8>PAN: {from_info['pan']}<br/>
+        Mobile: {from_info['mobile']}<br/>
+        Email: {company_info.get('email', '')}</font>"""
+        header_data = [[logo, Paragraph(from_info_text, company_detail_style)]]
     else:
-        # Without logo
-        company_info_text = f"""<b>{vendor_info['name']}</b><br/>
-        <font size=8>PAN {vendor_info['pan']}<br/>
-        {vendor_info['address']}<br/>
-        Email: {vendor_info['email']}</font>"""
-        header_data = [['', Paragraph(company_info_text, company_detail_style)]]
+        from_info_text = f"""<b>{from_info['creator_name']}</b><br/>
+        <font size=8>PAN: {from_info['pan']}<br/>
+        Mobile: {from_info['mobile']}<br/>
+        Email: {company_info.get('email', '')}</font>"""
+        header_data = [['', Paragraph(from_info_text, company_detail_style)]]
     
     header_table = Table(header_data, colWidths=[1.5*inch, 5*inch])
     header_table.setStyle(TableStyle([
@@ -124,11 +114,13 @@ def generate_invoice_pdf(vendor_info, client_info, invoice_data, items_df, logo_
     # Invoice title
     elements.append(Paragraph("INVOICE", invoice_title_style))
     
-    # Bill To and Invoice details table
+    # Bill To (CONSTANT) and Invoice details
     bill_to_text = f"""<b>Bill To:</b><br/>
-    <b>{client_info['name']}</b><br/>
-    <font size=8>GSTIN: {client_info['gstin']}<br/>
-    {client_info['address']}</font>"""
+    <b>{bill_to_info['name']}</b><br/>
+    <font size=8>{bill_to_info['address']}</font>"""
+    
+    if bill_to_info.get('gstin'):
+        bill_to_text += f"<br/><font size=8>GSTIN: {bill_to_info['gstin']}</font>"
     
     invoice_details_text = f"""<b>Invoice #:</b> {invoice_data['invoice_number']}<br/>
     <b>Invoice Date:</b> {invoice_data['invoice_date']}<br/>
@@ -149,43 +141,26 @@ def generate_invoice_pdf(vendor_info, client_info, invoice_data, items_df, logo_
     elements.append(Spacer(1, 0.2*inch))
     
     # Items table
-    items_data = [['#', 'Item', 'HSN/SAC', 'Amount']]
+    items_data = [['#', 'Item', 'Amount']]
+    items_data.append([
+        '1',
+        str(invoice_data['campaign_name']),
+        f"₹{invoice_data['amount']:,.2f}"
+    ])
     
-    for idx, row in items_df.iterrows():
-        items_data.append([
-            str(idx + 1),
-            str(row['Description']),
-            str(row.get('HSN_SAC', '-')),
-            f"₹{row['Amount']:,.2f}"
-        ])
-    
-    # Calculate totals
-    subtotal = items_df['Amount'].sum()
-    cgst_rate = invoice_data.get('cgst_rate', 0)
-    sgst_rate = invoice_data.get('sgst_rate', 0)
-    cgst_amount = subtotal * (cgst_rate / 100)
-    sgst_amount = subtotal * (sgst_rate / 100)
-    total = subtotal + cgst_amount + sgst_amount
-    
-    # Add totals
-    items_data.append(['', '', 'Total', f"₹{subtotal:,.2f}"])
-    if cgst_rate > 0:
-        items_data.append(['', '', f'CGST ({cgst_rate}%)', f"₹{cgst_amount:,.2f}"])
-    if sgst_rate > 0:
-        items_data.append(['', '', f'SGST ({sgst_rate}%)', f"₹{sgst_amount:,.2f}"])
-    
-    # Total items count
-    total_items = len(items_df)
-    items_data.append(['', f'Total Items / Qty: {total_items} / {total_items}', '', ''])
-    items_data.append(['', '', '', ''])
-    items_data.append(['', '', 'Amount Payable:', f"₹{total:,.2f}"])
+    # Total
+    total = invoice_data['amount']
+    items_data.append(['', 'Total', f"₹{total:,.2f}"])
+    items_data.append(['', f'Total Items / Qty: 1 / 1', ''])
+    items_data.append(['', '', ''])
+    items_data.append(['', 'Amount Payable:', f"₹{total:,.2f}"])
     
     # Amount in words
     total_int = int(total)
     amount_words = number_to_words(total_int)
-    items_data.append(['', f'Total amount (in words): INR {amount_words}', '', ''])
+    items_data.append(['', f'Total amount (in words): INR {amount_words}', ''])
     
-    items_table = Table(items_data, colWidths=[0.5*inch, 3.5*inch, 1.5*inch, 1*inch])
+    items_table = Table(items_data, colWidths=[0.5*inch, 4.5*inch, 1.5*inch])
     items_table.setStyle(TableStyle([
         # Header row
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
@@ -198,36 +173,35 @@ def generate_invoice_pdf(vendor_info, client_info, invoice_data, items_df, logo_
         
         # Data rows
         ('FONTSIZE', (0, 1), (-1, -1), 9),
-        ('GRID', (0, 0), (-1, -(6)), 0.5, colors.grey),
-        ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+        ('GRID', (0, 0), (-1, -5), 0.5, colors.grey),
+        ('ALIGN', (2, 1), (2, -1), 'RIGHT'),
         ('ALIGN', (0, 1), (0, -1), 'CENTER'),
         
         # Total rows styling
-        ('FONTNAME', (2, -6), (-1, -6), 'Helvetica-Bold'),
-        ('FONTNAME', (2, -4), (-1, -4), 'Helvetica-Bold'),
-        ('FONTNAME', (2, -2), (-1, -2), 'Helvetica-Bold'),
-        ('FONTSIZE', (2, -2), (-1, -2), 11),
-        ('LINEABOVE', (2, -2), (-1, -2), 1, colors.black),
+        ('FONTNAME', (1, -5), (-1, -5), 'Helvetica-Bold'),
+        ('FONTNAME', (1, -2), (-1, -2), 'Helvetica-Bold'),
+        ('FONTSIZE', (1, -2), (-1, -2), 11),
+        ('LINEABOVE', (1, -2), (-1, -2), 1, colors.black),
         
         # Amount in words
-        ('SPAN', (1, -1), (3, -1)),
-        ('FONTSIZE', (1, -1), (3, -1), 8),
-        ('TOPPADDING', (1, -1), (3, -1), 10),
+        ('SPAN', (1, -1), (2, -1)),
+        ('FONTSIZE', (1, -1), (2, -1), 8),
+        ('TOPPADDING', (1, -1), (2, -1), 10),
     ]))
     
     elements.append(items_table)
     elements.append(Spacer(1, 0.3*inch))
     
-    # Bank details and signature
+    # Bank details (varies per row) and signature
     bank_text = f"""<b>Bank Details:</b><br/>
-    <font size=8>Bank: {vendor_info.get('bank_name', '')}<br/>
-    Account Holder: {vendor_info.get('account_holder', '')}<br/>
-    Account #: {vendor_info.get('account_number', '')}<br/>
-    IFSC Code: {vendor_info.get('ifsc_code', '')}<br/>
-    Branch: {vendor_info.get('branch', '')}</font>"""
+    <font size=8>Bank: {company_info.get('bank_name', '')}<br/>
+    Account Holder: {from_info['creator_name']}<br/>
+    Account #: {invoice_data.get('bank_account_number', '')}<br/>
+    IFSC Code: {invoice_data.get('ifsc', '')}<br/>
+    Branch: {company_info.get('branch', '')}</font>"""
     
     signature_text = f"""<br/><br/><br/>
-    <font size=8>For {vendor_info['name']}<br/><br/><br/><br/>
+    <font size=8>For {from_info['creator_name']}<br/><br/><br/><br/>
     Authorized Signatory</font>"""
     
     footer_data = [[
@@ -243,7 +217,12 @@ def generate_invoice_pdf(vendor_info, client_info, invoice_data, items_df, logo_
     
     doc.build(elements)
     buffer.seek(0)
-    return buffer, total
+    return buffer
+
+def normalize_column_names(df):
+    """Normalize column names to lowercase and remove spaces"""
+    df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_').str.replace('.', '')
+    return df
 
 # App styling
 st.markdown("""
@@ -263,28 +242,29 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # App title
-st.markdown('<p class="main-header">📄 Invoice Generator</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Upload your Excel file to generate professional invoices</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">📄 Bulk Invoice Generator</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Generate multiple invoices from one Excel file</p>', unsafe_allow_html=True)
 
-# Sidebar for vendor information
+# Sidebar for BILL TO (constant) and Company info
 with st.sidebar:
-    st.header("🏢 Vendor Information")
+    st.header("📋 BILL TO (Constant)")
+    st.markdown("*This appears on all invoices*")
     
-    vendor_name = st.text_input("Vendor Name", "M/S APJ DIGITAL SOLUTIONS LLP")
-    vendor_pan = st.text_input("PAN Number", "ACNFA0470H")
-    vendor_gstin = st.text_input("GSTIN (if applicable)", "")
-    vendor_address = st.text_area("Address", 
-        "No 245, 3RD MAIN, 10TH CROSS, 7 MELEKHANENGERS\nBangalore West, KARNATAKA, 560085")
-    vendor_email = st.text_input("Email", "apjdigitalsol@gmail.com")
+    bill_to_name = st.text_input("Client Name", "NEXGROW DIGITAL PRIVATE LIMITED")
+    bill_to_address = st.text_area("Client Address", 
+        "Block C, 4th Floor, 56/6\nSector 62, Noida\nGautambuddha Nagar, UTTAR PRADESH, 201309")
+    bill_to_gstin = st.text_input("Client GSTIN (optional)", "09AAKCN1659F1Z8")
     
-    st.subheader("🏦 Bank Details")
+    st.markdown("---")
+    st.header("🏢 Company Details")
+    st.markdown("*Additional info for invoices*")
+    
+    company_email = st.text_input("Company Email", "apjdigitalsol@gmail.com")
     bank_name = st.text_input("Bank Name", "Karnataka Bank")
-    account_holder = st.text_input("Account Holder", "APJ DIGITAL SOLUTIONS")
-    account_number = st.text_input("Account Number", "")
-    ifsc_code = st.text_input("IFSC Code", "")
     branch = st.text_input("Branch", "Bangalore")
     
     # Logo upload
+    st.markdown("---")
     st.subheader("🎨 Company Logo (Optional)")
     logo_file = st.file_uploader("Upload Logo", type=['png', 'jpg', 'jpeg'])
     logo_path = None
@@ -297,146 +277,180 @@ with st.sidebar:
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.header("📊 Upload Invoice Data")
+    st.header("📊 Upload Excel File")
     st.markdown("""
-    Your Excel file should contain the following sheets:
-    - **Vendor_Info**: Your company details (optional, uses sidebar if not provided)
-    - **Client_Info**: Client name, GSTIN, address
-    - **Invoice_Info**: Invoice number, date, due date, CGST%, SGST%
-    - **Items**: Description, HSN_SAC, Amount
+    **Required columns (case-insensitive):**
+    - Sl No / SI No
+    - Creator Name
+    - PAN
+    - Mobile Number
+    - Invoice Number
+    - Campaign Name
+    - Amount
+    - Bank Account Number
+    - IFSC
+    
+    **Optional columns:**
+    - Invoice Date (auto-generated if empty)
+    - Due Date (auto-generated if empty)
     """)
     
     uploaded_file = st.file_uploader("Choose an Excel file", type=['xlsx', 'xls'])
 
 with col2:
     st.header("📥 Sample Template")
-    if st.button("Download Template", type="secondary"):
+    if st.button("Download Template", type="secondary", use_container_width=True):
         # Create sample template
-        sample_vendor = pd.DataFrame({
-            'name': ['M/S APJ DIGITAL SOLUTIONS LLP'],
-            'pan': ['ACNFA0470H'],
-            'address': ['No 245, 3RD MAIN, 10TH CROSS, Bangalore'],
-            'email': ['apjdigitalsol@gmail.com'],
-            'bank_name': ['Karnataka Bank'],
-            'account_holder': ['APJ DIGITAL SOLUTIONS'],
-            'account_number': ['1234567890'],
-            'ifsc_code': ['KARB0000123'],
-            'branch': ['Bangalore']
-        })
-        
-        sample_client = pd.DataFrame({
-            'name': ['NEXGROW DIGITAL PRIVATE LIMITED'],
-            'gstin': ['09AAKCN1659F1Z8'],
-            'address': ['Block C, 4th Floor, 56/6\nSector 62, Noida\nGautambuddha Nagar, UTTAR PRADESH, 201309']
-        })
-        
-        sample_invoice = pd.DataFrame({
-            'invoice_number': ['INV-102'],
-            'invoice_date': ['09 Feb 2026'],
-            'due_date': ['09 Feb 2026'],
-            'cgst_rate': [0],
-            'sgst_rate': [0]
-        })
-        
-        sample_items = pd.DataFrame({
-            'Description': ['Twitter Campaign Tamil Nadu - Modi visit'],
-            'HSN_SAC': ['-'],
-            'Amount': [110000.00]
+        sample_data = pd.DataFrame({
+            'Sl No': [1, 2, 3],
+            'Creator Name': ['John Doe', 'Jane Smith', 'Bob Johnson'],
+            'PAN': ['ABCDE1234F', 'FGHIJ5678K', 'KLMNO9012P'],
+            'Mobile Number': ['9876543210', '9876543211', '9876543212'],
+            'Invoice Number': ['INV-001', 'INV-002', 'INV-003'],
+            'Campaign Name': ['Twitter Campaign - Product Launch', 'Instagram Ads - Festival Sale', 'LinkedIn Campaign - B2B Lead Gen'],
+            'Amount': [110000, 75000, 50000],
+            'Bank Account Number': ['1234567890', '0987654321', '1122334455'],
+            'IFSC': ['KARB0000123', 'KARB0000124', 'KARB0000125'],
+            'Invoice Date': ['15 Feb 2026', '15 Feb 2026', '15 Feb 2026'],
+            'Due Date': ['28 Feb 2026', '28 Feb 2026', '28 Feb 2026']
         })
         
         sample_buffer = BytesIO()
         with pd.ExcelWriter(sample_buffer, engine='openpyxl') as writer:
-            sample_vendor.to_excel(writer, sheet_name='Vendor_Info', index=False)
-            sample_client.to_excel(writer, sheet_name='Client_Info', index=False)
-            sample_invoice.to_excel(writer, sheet_name='Invoice_Info', index=False)
-            sample_items.to_excel(writer, sheet_name='Items', index=False)
+            sample_data.to_excel(writer, index=False, sheet_name='Sheet1')
         
         sample_buffer.seek(0)
         st.download_button(
             label="📄 Download Excel Template",
             data=sample_buffer,
-            file_name="invoice_template_apj.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            file_name="Bulk_Invoice_Template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
 
 # Process uploaded file
 if uploaded_file is not None:
     try:
-        # Read all sheets
-        excel_file = pd.ExcelFile(uploaded_file)
+        # Read Excel file
+        df = pd.read_excel(uploaded_file)
         
-        # Check required sheets
-        required_sheets = ['Client_Info', 'Invoice_Info', 'Items']
-        missing_sheets = [sheet for sheet in required_sheets if sheet not in excel_file.sheet_names]
+        # Normalize column names
+        df = normalize_column_names(df)
         
-        if missing_sheets:
-            st.error(f"❌ Missing required sheets: {', '.join(missing_sheets)}")
+        # Check required columns
+        required_cols = ['creator_name', 'pan', 'mobile_number', 'invoice_number', 
+                        'campaign_name', 'amount', 'bank_account_number', 'ifsc']
+        
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
+            st.info("💡 Column names are case-insensitive. Check your Excel file format.")
         else:
-            # Read data
-            if 'Vendor_Info' in excel_file.sheet_names:
-                vendor_info_df = pd.read_excel(uploaded_file, sheet_name='Vendor_Info')
-                vendor_info = vendor_info_df.iloc[0].to_dict()
-            else:
-                # Use sidebar values
-                vendor_info = {
-                    'name': vendor_name,
-                    'pan': vendor_pan,
-                    'address': vendor_address,
-                    'email': vendor_email,
-                    'bank_name': bank_name,
-                    'account_holder': account_holder,
-                    'account_number': account_number,
-                    'ifsc_code': ifsc_code,
-                    'branch': branch
-                }
-            
-            client_info_df = pd.read_excel(uploaded_file, sheet_name='Client_Info')
-            invoice_info_df = pd.read_excel(uploaded_file, sheet_name='Invoice_Info')
-            items_df = pd.read_excel(uploaded_file, sheet_name='Items')
-            
-            # Preview section
+            # Preview data
             st.header("👀 Preview Data")
+            st.dataframe(df.head(10), use_container_width=True)
+            st.info(f"📊 Total rows found: **{len(df)}** → Will generate **{len(df)} invoices**")
             
-            tab1, tab2, tab3 = st.tabs(["📋 Invoice Info", "👤 Client Info", "📦 Items"])
+            # Download option
+            st.header("📦 Download Options")
+            download_option = st.radio(
+                "Choose download format:",
+                ["ZIP File (All PDFs)", "Individual PDFs"],
+                index=0
+            )
             
-            with tab1:
-                st.dataframe(invoice_info_df, use_container_width=True)
-            
-            with tab2:
-                st.dataframe(client_info_df, use_container_width=True)
-            
-            with tab3:
-                st.dataframe(items_df, use_container_width=True)
-            
-            # Prepare data
-            client_info = client_info_df.iloc[0].to_dict()
-            invoice_data = invoice_info_df.iloc[0].to_dict()
-            
-            # Generate invoice button
-            st.header("🎨 Generate Invoice")
-            
-            col1, col2 = st.columns([1, 3])
-            
-            with col1:
-                if st.button("📄 Generate PDF", type="primary", use_container_width=True):
-                    with st.spinner("Generating invoice..."):
-                        pdf_buffer, total = generate_invoice_pdf(
-                            vendor_info, client_info, invoice_data, items_df, logo_path
+            # Generate invoices button
+            if st.button("🎨 Generate Invoices", type="primary", use_container_width=True):
+                with st.spinner(f"Generating {len(df)} invoices..."):
+                    # Prepare constant data
+                    bill_to_info = {
+                        'name': bill_to_name,
+                        'address': bill_to_address,
+                        'gstin': bill_to_gstin if bill_to_gstin else None
+                    }
+                    
+                    company_info = {
+                        'email': company_email,
+                        'bank_name': bank_name,
+                        'branch': branch
+                    }
+                    
+                    # Generate PDFs
+                    pdf_buffers = []
+                    current_date = datetime.now().strftime('%d %b %Y')
+                    
+                    progress_bar = st.progress(0)
+                    
+                    for idx, row in df.iterrows():
+                        # Prepare FROM info (varies per row)
+                        from_info = {
+                            'creator_name': str(row['creator_name']),
+                            'pan': str(row['pan']),
+                            'mobile': str(row['mobile_number'])
+                        }
+                        
+                        # Prepare invoice data
+                        invoice_data = {
+                            'invoice_number': str(row['invoice_number']),
+                            'invoice_date': str(row.get('invoice_date', current_date)),
+                            'due_date': str(row.get('due_date', current_date)),
+                            'campaign_name': str(row['campaign_name']),
+                            'amount': float(row['amount']),
+                            'bank_account_number': str(row['bank_account_number']),
+                            'ifsc': str(row['ifsc'])
+                        }
+                        
+                        # Generate PDF
+                        pdf_buffer = generate_invoice_pdf(
+                            bill_to_info, from_info, invoice_data, company_info, logo_path
                         )
                         
-                        st.success(f"✅ Invoice generated! Total: ₹{total:,.2f}")
+                        pdf_buffers.append({
+                            'buffer': pdf_buffer,
+                            'filename': f"Invoice_{invoice_data['invoice_number']}.pdf"
+                        })
+                        
+                        # Update progress
+                        progress_bar.progress((idx + 1) / len(df))
+                    
+                    st.success(f"✅ Generated {len(pdf_buffers)} invoices successfully!")
+                    
+                    # Download based on option
+                    if download_option == "ZIP File (All PDFs)":
+                        # Create ZIP file
+                        zip_buffer = BytesIO()
+                        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                            for pdf_data in pdf_buffers:
+                                zip_file.writestr(pdf_data['filename'], pdf_data['buffer'].getvalue())
+                        
+                        zip_buffer.seek(0)
                         
                         st.download_button(
-                            label="💾 Download Invoice PDF",
-                            data=pdf_buffer,
-                            file_name=f"Invoice_{invoice_data['invoice_number']}.pdf",
-                            mime="application/pdf",
+                            label=f"📦 Download All {len(pdf_buffers)} Invoices (ZIP)",
+                            data=zip_buffer,
+                            file_name=f"Invoices_{datetime.now().strftime('%Y%m%d')}.zip",
+                            mime="application/zip",
                             use_container_width=True
                         )
+                    else:
+                        # Individual downloads
+                        st.subheader("📄 Download Individual PDFs")
+                        cols = st.columns(3)
+                        for idx, pdf_data in enumerate(pdf_buffers):
+                            with cols[idx % 3]:
+                                st.download_button(
+                                    label=f"📄 {pdf_data['filename']}",
+                                    data=pdf_data['buffer'],
+                                    file_name=pdf_data['filename'],
+                                    mime="application/pdf",
+                                    use_container_width=True,
+                                    key=f"pdf_{idx}"
+                                )
             
     except Exception as e:
         st.error(f"❌ Error processing file: {str(e)}")
-        st.info("💡 Please ensure your Excel file matches the template format. Download the sample template to see the expected structure.")
+        st.info("💡 Please ensure your Excel file matches the template format.")
 
 else:
     st.info("👆 Upload an Excel file to get started, or download the sample template")
@@ -445,7 +459,7 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
-    <p>Built with Streamlit | Upload Excel → Generate Professional Invoice PDF</p>
-    <p style='font-size: 0.8rem;'>Supports GST invoicing with CGST/SGST calculations</p>
+    <p>Built with Streamlit | One Excel Row → One Invoice PDF</p>
+    <p style='font-size: 0.8rem;'>Bill To (constant from sidebar) • From (varies per row from Excel)</p>
 </div>
 """, unsafe_allow_html=True)
