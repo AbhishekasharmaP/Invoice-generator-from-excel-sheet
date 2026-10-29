@@ -58,7 +58,6 @@ REQUIRED_COLUMNS = {
     "creator_name": "Creator Name",
     "pan": "PAN",
     "mobile_number": "Mobile Number",
-    "invoice_number": "Invoice Number",
     "campaign_name": "Campaign Name",
     "amount": "Amount",
     "bank_account_number": "Bank Account Number",
@@ -72,8 +71,11 @@ REQUIRED_COLUMNS = {
 COLUMN_ALIASES = {
     "si_no": "sl_no", "s_no": "sl_no", "sno": "sl_no", "serial_no": "sl_no",
     "creator": "creator_name",
+    "gstin": "creator_gstin", "gstin_optional": "creator_gstin",
+    "creator_gstin": "creator_gstin",
     "mobile": "mobile_number", "phone": "mobile_number", "phone_number": "mobile_number",
     "invoice_no": "invoice_number", "invoice": "invoice_number",
+    "invoice_number_optional": "invoice_number",
     "campaign": "campaign_name",
     "account_number": "bank_account_number", "account_no": "bank_account_number",
     "bank_account_no": "bank_account_number",
@@ -196,6 +198,8 @@ def generate_invoice_pdf(bill_to, frm, inv, logo_path=None):
     from_lines = [f"<b>{e(frm['creator_name'])}</b>"]
     if frm["pan"]:
         from_lines.append(f"PAN: {e(frm['pan'])}")
+    if frm.get("gstin"):
+        from_lines.append(f"GSTIN: {e(frm['gstin'])}")
     if frm["mobile"]:
         from_lines.append(f"Mobile: {e(frm['mobile'])}")
     if frm["email"]:
@@ -216,9 +220,12 @@ def generate_invoice_pdf(bill_to, frm, inv, logo_path=None):
         bill_lines.append(f"<font size=8>GSTIN: {e(bill_to['gstin'])}</font>")
     bill_lines.append(f"<font size=8>{e(bill_to['address']).replace(chr(10), '<br/>')}</font>")
 
-    details = (f"<b>Invoice #:</b> {e(inv['invoice_number'])}<br/>"
-               f"<b>Invoice Date:</b> {e(inv['invoice_date'])}<br/>"
-               f"<b>Due Date:</b> {e(inv['due_date'])}")
+    detail_lines = []
+    if inv["invoice_number"]:
+        detail_lines.append(f"<b>Invoice #:</b> {e(inv['invoice_number'])}")
+    detail_lines.append(f"<b>Invoice Date:</b> {e(inv['invoice_date'])}")
+    detail_lines.append(f"<b>Due Date:</b> {e(inv['due_date'])}")
+    details = "<br/>".join(detail_lines)
     info = Table([[Paragraph("<br/>".join(bill_lines), base), Paragraph(details, right)]],
                  colWidths=[3.8 * inch, 3.2 * inch])
     info.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -288,8 +295,9 @@ def build_template_bytes():
         "Sl No": [1, 2, 3],
         "Creator Name": ["John Doe", "Jane Smith", "Bob Johnson"],
         "PAN": ["ABCDE1234F", "FGHIJ5678K", "KLMNO9012P"],
+        "GSTIN (Optional)": ["29ABCDE1234F1Z5", "", ""],
         "Mobile Number": ["9876543210", "9876543211", "9876543212"],
-        "Invoice Number": ["INV-001", "INV-002", "INV-003"],
+        "Invoice Number (Optional)": ["INV-001", "INV-002", "INV-003"],
         "Campaign Name": ["Twitter Campaign - Product Launch",
                           "Instagram Ads - Festival Sale",
                           "LinkedIn Campaign - B2B Lead Gen"],
@@ -351,12 +359,13 @@ with col1:
     st.header("📊 Upload Excel File")
     st.markdown("""
 **Required columns (case-insensitive):**
-Creator Name, PAN, Mobile Number, Invoice Number, Campaign Name, Amount,
-Bank Account Number, IFSC, Bank Name, Email Address, Branch
+Creator Name, PAN, Mobile Number, Campaign Name, Amount, Bank Account Number,
+IFSC, Bank Name, Email Address, Branch
 
-**Optional columns:** Sl No, Invoice Date, Due Date (current date is used if empty)
+**Optional columns:** Sl No, GSTIN (Optional), Invoice Number (Optional), Invoice Date, Due Date
+(current date is used if a date is empty)
 
-Creator Name, PAN, Mobile Number, Email Address and all bank details come from each row
+Creator Name, PAN, optional GSTIN, Mobile Number, Email Address and all bank details come from each row
 and appear in the **From** block of that row's invoice.
 """)
     uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx", "xls"])
@@ -407,10 +416,10 @@ if uploaded_file is not None:
                     excel_row = idx + 2  # header is row 1
                     try:
                         creator = clean(row["creator_name"])
-                        inv_no = clean(row["invoice_number"])
+                        inv_no = clean(row.get("invoice_number"))
                         campaign = clean(row["campaign_name"])
-                        if not creator or not inv_no or not campaign:
-                            raise ValueError("Creator Name, Invoice Number and Campaign Name are required")
+                        if not creator or not campaign:
+                            raise ValueError("Creator Name and Campaign Name are required")
 
                         amount = float(str(row["amount"]).replace(",", "").strip())
                         if amount <= 0:
@@ -419,6 +428,7 @@ if uploaded_file is not None:
                         frm = {
                             "creator_name": creator,
                             "pan": clean(row["pan"]),
+                            "gstin": clean(row.get("creator_gstin")),
                             "mobile": clean(row["mobile_number"]),
                             "email": clean(row["email"]),
                             "bank_name": clean(row["bank_name"]),
@@ -436,7 +446,7 @@ if uploaded_file is not None:
 
                         pdf = generate_invoice_pdf(bill_to, frm, inv, logo_path)
 
-                        name = safe_filename(f"Invoice_{inv_no}")
+                        name = safe_filename(f"Invoice_{inv_no}" if inv_no else f"Invoice_{creator}_{excel_row}")
                         unique, n = name, 2
                         while unique in used_names:
                             unique, n = f"{name}_{n}", n + 1
