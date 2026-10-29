@@ -329,11 +329,11 @@ st.markdown('<p class="sub-header">Generate multiple invoices from one Excel fil
 with st.sidebar:
     st.header("📋 BILL TO (Constant)")
     st.markdown("*This appears on all invoices*")
-    bill_to_name = st.text_input("Client Name", "NEXGROW DIGITAL PRIVATE LIMITED")
+    bill_to_name = st.text_input("Client Name", "")
     bill_to_address = st.text_area(
         "Client Address",
-        "Block C, 4th Floor, 56/6\nSector 62, Noida\nGautambuddha Nagar, UTTAR PRADESH, 201309")
-    bill_to_gstin = st.text_input("Client GSTIN (optional)", "09AAKCN1659F1Z8")
+        "")
+    bill_to_gstin = st.text_input("Client GSTIN (optional)", "")
 
     st.markdown("---")
     st.subheader("🎨 Logo (Optional)")
